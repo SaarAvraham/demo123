@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
@@ -181,9 +182,10 @@ public class DemoApplication {
 
     @GetMapping("/gson")
     private StreamingResponseBody getAllEmployees() {
-        return out -> justBlockingQueueFixed(out);
+//        return out -> justBlockingQueueFixed(out);
 //        return out -> justBlockingQueue(out);
 //        return out -> justOnAnotherThreadThisIsBuggyShowTal(out);
+        return out -> fluxToStream(out);
 //        return out -> { // TODO: 2/27/2021 Saar - try to write to outputstream with original thread (parent)
 //            BlockingQueue<Batch> blockingQueue = new ArrayBlockingQueue<>(4);
 //            Instant start = Instant.now();
@@ -256,7 +258,8 @@ public class DemoApplication {
 ////                            e.printStackTrace();
 ////                        }
 ////                    })
-//                    , Throwable::printStackTrace, () -> isDone.set(true));
+//                            , Throwable::printStackTrace, () -> isDone.set(true));
+//
 //
 ////            stringStream.forEach(s -> {
 ////                try {
@@ -291,6 +294,59 @@ public class DemoApplication {
 ////            });
 ////            thread.start();
 //        };
+    }
+
+    private void fluxToStream(OutputStream out) throws IOException {
+        System.out.println("Current thread handling request is " + Thread.currentThread().getId());
+
+        Instant start = Instant.now();
+        JsonWriter writer = new JsonWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8));
+        writer.setIndent("  ");
+        writer.beginArray();
+
+        Stream<String> stringStream = IntStream.range(0, 5000000)
+                .boxed()
+                .map(i -> i + " fjdjkdsnkfsdfs");
+
+        Mono.fromSupplier(() -> "first string")
+                .delayElement(Duration.ofSeconds(5))
+                .concatWith(Flux.fromStream(stringStream))
+                .windowTimeout(20000, Duration.ofSeconds(1))
+//                .bufferTimeout(20000, Duration.ofMillis(200))
+                .doOnNext(strings -> System.out.println("Current thread got batch " + Thread.currentThread().getId()))
+//                    .window(Duration.ofMillis(500))
+                .publishOn(Schedulers.boundedElastic())
+                .doOnNext(strings -> System.out.println("Current thread got batch from publish " + Thread.currentThread().getId()))
+                .toStream()
+                .forEach(strings -> {
+                    System.out.println("Current thread in stream is " + Thread.currentThread().getId());
+                    writeListAsArray(writer, strings.collectList().block());
+//                    try {
+//                        writer.beginArray();
+//                    } catch (IOException e) {
+//                        e.printStackTrace();
+//                    }
+//                    stringFlux.toStream()
+//                            .forEach(s -> {
+//                                try {
+//                                    writer.value(s);
+//                                } catch (IOException e) {
+//                                    e.printStackTrace();
+//                                }
+//                            });
+//                    try {
+//                        writer.endArray();
+//                    } catch (IOException e) {
+//                        e.printStackTrace();
+//                    }
+                });
+
+        System.out.println(Thread.currentThread().getId());
+        System.out.println(Duration.between(start, Instant.now()));
+        System.out.println("Closing array!!!!!!!!!!!");
+        writer.endArray();
+
+        writer.close();
     }
 
     private void writeListAsArray(AtomicReference<JsonWriter> jsonWriterAtomicReference, List<String> strings) {
